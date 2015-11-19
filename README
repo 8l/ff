@@ -1,0 +1,1058 @@
+
+ff - A Simple FORTH System
+==========================
+
+
+
+Introduction
+------------
+
+This is `ff`, an implementation of the Forth programming language for 32-bit 
+CPUs on Linux and Plan 9. `ff` is indirect-threaded and currently available for 
+x86 and ARM processors. It is kept intentionally simple to reduce size and 
+complexity to a minimum. Floating-point math and double-precision numbers are 
+not supported and only very limited I/O facilities are provided. On the other 
+hand, the machine-code portion is small and it should be very easy to port `ff` 
+to other architectures. 
+
+Installation
+------------
+
+`ff` is available in pre-compiled, binary form and requires no additional 
+libraries, so it is not necessary to build it to get going. 
+
+The following files are included in the distribution:
+
+    ff-i386         x86 executable
+    ff-arm          ARM executable
+    ff-i386-plan9   x86 executable for Plan 9
+    README          This file
+    ff-i386.s       Assembler sources for x86 (NASM syntax)
+    ff-arm.s        Assembler sources for ARM (GAS syntax)
+    primitives.s    Primitive dictionary
+    words-nasm.s    Bootstrapping core dictionary (NASM syntax)
+    words-gas.s     Bootstrapping core dictionary (GAS syntax)
+    core.f          Core dictionary sources
+    meta.f          Meta-compiler sources
+    meta-install.f  Meta-compiler installation
+    elf.f           Meta-compiler (elf binary generation)
+    cross.f         Meta-compiler (Plan 9 a.out binary generation)
+    stuff.f         Miscellaneous words
+    blocks.f        Block- and buffer words
+    ed.f            Block-editor sources
+    robots.f        A simple game
+    forth           Tcl/Tk frontend
+    x-i386.f        Settings for cross-compilation to x86
+    x-arm.f         Settings for cross-compilation to ARM
+    x-i386-plan9.f  Settings for cross-compilation to x86 on Plan 9
+
+In case you want to build `ff-*` yourself you will need an assembler - 
+[NASM][1] for the x86 version and [GNU as][2] for ARM, the latter being usually 
+available on an ARM-based linux with development tools installed. ARM `ff` can 
+also easily be cross-assembled from a non-ARM Linux system. 
+
+The necessary build-commands look like this:
+
+    nasm -f elf ff-i386.s -o ff-i386.o
+    ld ff-i386.o -o ff-i386               # add "-m elf_i386" on an x86_64 system
+
+Or, for an ARM based system:
+
+    as ff-arm.s -o ff-arm.o
+    ld ff-arm.o -o ff-arm
+
+Note that this creates only a minimal Forth system, sufficient to run the 
+metacompiler. To generate or re-generate a complete binary, start the initial 
+executable and enter: 
+
+    include meta.f
+    include elf.f
+    include meta-install.f
+    include core.f
+    <ARCH> msave ff
+    bye
+
+where `<ARCH>` should be either `i386` or `arm`, depending on the system this 
+is running on.
+
+On Plan 9, re-compilation is slightly different:
+
+    include meta.f
+    include a.out.f
+    include meta-install.f
+    include core.f
+    msave ff
+    bye
+
+The C library (`libc`) is not used, `ff` directly invokes Linux or Plan 9 
+system-calls. 
+
+Cross-compilation is similar, but needs an additional file with hard-coded
+addresses, together with binaries containing the target-specific machine code
+of the kernel in the `boot` directory. So, assuming `ff-arm` is available as 
+`boot/ff-arm`:
+
+    include meta.f
+    0 target-endianness      \ if target and host have different byte-order
+                             \ 0 = big, 1 = little
+    include elf.f
+    include x-arm.f          \ or "include x-i386.f"
+    include meta-install.f
+    include core.f
+    arm msave ff             \ or "i386 msave ff"
+    bye
+
+Again, replace `elf.f` with `a.out.f` and drop the argument to `msave` on
+Plan 9. Note that ARM/Plan 9 is currently not supported.
+
+Porting to other platforms should be straightforward, since the assembler 
+portion is quite small. Porting the system to embedded systems should also 
+don't present any problems - just add or remove primitive words in `ff-*.s` as 
+necessary and metacompile. 
+
+Some additional files and scripts for building and cross-compilation are
+avaialble in the [`ff` development repository][5]. 
+
+
+Usage
+-----
+
+`ff` reads Forth commands from stdin, interpreting words as they are parsed. A 
+subset of the [Forth ANSI standard][3] is supported, see below for a 
+description of all words that are available. 
+
+All input is parsed case-sensitively, and the base dictionary contains 
+lowercase words. 
+
+If one or more command-line arguments are given, then the first argument is 
+loaded as an image-file (using `bload`.) 
+
+The `forth` script implements a simple text-based front-end for `ff`, and is 
+written in Tcl/Tk. It provides a very basic *terminal* and implements basic 
+text-editing functionality. It defaults to invoking a binary named `ff` which 
+should be in the `PATH` (if it isn't copy or symlink the `ff-*` binary for your 
+architecture) 
+
+Command-line options that the `forth` script accepts:
+
+    -background COLORNAME          select background color
+    -foreground COLORNAME          select foreground color
+    -fontname FONTNAME             select font
+    -fontsize FONTSIZE             select fontsize
+    -execute FILENAME              load Tcl source from FILENAME at startup
+    -ff FILENAME                   run FILENAME instead of the default "ff"
+    -cd DIRECTORY                  change working directory to DIRECTORY
+    -init STRING                   Forth code to be executed on startup
+    -image FILENAME                Load image-file on startup (uses "-init")
+
+Output from `ff` is appended to any text in the window. The character `^L` 
+(ASCII 12) is handled specially and clears the window.  
+
+`RETURN` will send the current selection to the Forth interpreter, or the 
+current line if no text is currently selected. Pressing the `Insert` key will 
+enter *hold* mode, which means `RETURN` will just insert a newline, without 
+executing any code. Pressing `Insert` again will send all text beginning from 
+the location where `Insert` was first pressed up to the current cursor position 
+and disable hold mode. 
+
+Pressing the right mouse button on a word in the window will execute the Forth 
+statement `command <word>`. `command` is a deferred word defined in `stuff.f` 
+that can be used to implement a poor man's menu system by just right-clicking 
+words in the window. 
+
+Pressing `Escape` terminates the Forth interpreter, pressing it again exits
+the front-end.
+
+The function keys can be bound to text that is either inserted at the current
+position, or (if it ends with a newline) immediately executed. To bind a key to
+a particular sequence, select the text you want to bind and press `Control-F<n>`,
+where `F<n>` is the function key you want to change.
+
+`Control-Up` and `Control-Down` move the currently shown screen, when the
+block and editor extensions are loaded.
+
+If a file called `.forth` exists in the `HOME` directory, it is loaded before 
+startup and can be used to customize the front-end. Study the source code for 
+`forth` to learn more about it. 
+
+If the Forth system crashes, the background color turns to black and a message 
+is printed. Press `RETURN` to restart. 
+
+
+Unicode support
+---------------
+
+Partial UTF-8 support is provided: `emit`, `char` and `[char]` encode and 
+decode UTF-8 sequences correctly. `key` does not. The front-end allows entering 
+unicode code-points using the `Delete` key, which accepts either a hexadecimal 
+code-point or a named character. The latter can be defined in your `~/.forth` 
+file by adding a definition for the `snippets` variable, holding lists of 
+2-element lists: 
+
+    set snippets {
+      {alpha "\u03b1"}
+      ...
+    }
+
+
+Builtin words
+-------------
+
+- Standard words (ANS)
+
+  Defined in the core system:
+
+  `!` `#` `#>` `<#` `#s` `'` `(` `*` `+` `+!` `+loop` `,` `-` `.` `."` `.r` `/` 
+  `/mod` `0<` `0<>` `0=` `0>` `1+` `1-` `2*` `2/` `2drop` `2dup` `:` `;` `<` `<#` 
+  `<>` `=` `>` `>body` `>in` `>r` `?do` `?dup` `@` `[` `[']` `[char]` `\` `]` 
+  `abort` `abort"` `abs` `accept` `again` `align` `aligned` `allot` `and` `base` 
+  `begin` `bl` `blk` `c!` `c,` `c@` `cell+` `cells` `char` `clear` `close-file` 
+  `cmove` `cmove>` `compare` `constant` `count` `cr` `create` `decimal` `defer` 
+  `depth` `do` `drop` `dup` `else` `emit` `erase` `execute` `exit` `false` `fill` 
+  `find` `h` `here` `hex` `hold` `i` `if` `immediate` `include` `included` 
+  `invert` `is` `j` `key` `list` `literal` `load` `loop` `lshift` `max` `min` 
+  `mod` `negate` `nip` `off` `on` `open-file` `or` `over` `pad` `page` `pick` 
+  `quit` `r/o` `r/w` `r>` `r@` `read-file` `recurse` `refill` `repeat` 
+  `reposition-file` `reset` `restore-input` `rot` `rshift` `s"` `save-input` 
+  `scr` `search` `sign` `sliteral` `space` `spaces` `state` `string` `swap` 
+  `then` `tib` `true` `tuck` `type` `u.` `u.r` `unloop` `until` `unused` 
+  `variable` `w/o` `while` `within` `word` `write-file` `xor` `does>` `current` 
+
+  Defined in the source files `stuff.f` and `blocks.f`:
+  
+  `2@` `2!` `2>r` `2r>` `?` `-trailing` `.s` `:noname` `/string` `also` `block` 
+  `buffer` `buffer:` `case` `context` `current` `definitions` `dump` 
+  `empty-buffers` `endcase` `endof` `forget` `forth` `list` `load` `marker` `of` 
+  `only` `order` `postpone` `previous` `scr` `thru` `update` `vocabulary` `words` 
+
+- Notes:
+
+  - `while` is only allowed once inside a `begin`/`repeat` construct.
+
+  - `<#`, `#`, `#s` and `#>` only handle single-precision numbers.
+
+  - There are no "state-smart" words. `is`, `."` and `s"` are intended
+    to be used inside colon definitions.
+
+- Non-standard core words
+
+    `2nip           ( x y -- y )`
+
+    Drops the 2nd item on the stack.
+
+    `<builds        ( | <word> -- )`
+
+    Compile-time part of `<builds ... does>` pair. In other Forth systems
+    `create` is normally used for this.
+
+    `>limit         ( -- a )`
+
+    Variable holding the end-index in the text-input-buffer (TIB).
+
+    `?stack         ( -- )`
+
+    Aborts on stack-underflow.
+
+    `(.)            ( n1 -- a n2 )`
+
+    Convert signed number to string and return address and length.
+
+    `_start         ( -- a )`
+
+    Pushes address of machine-code entry-point.
+
+    `_end           ( -- a )`
+
+    Pushes end-address of machine-code section.
+
+    `args           ( ... -- )`
+
+    Pushes a pointer to an array of cells, holding the number of
+    command line arguments, followed by pointers to zero-terminated
+    strings, one for each command-line argument (including the program
+    name), terminated by 0.
+
+    `boot           ( ... -- )`
+
+    Completely reinitializes the system and invokes `cold`.
+
+    `bload          ( a n -- )`
+
+    Loads a memory-image from `<filename>` restoring the state at
+    which the image was last saved with `save-image`. Note that
+    image-files are not portable and depend on the executable being
+    exactly the same at both save- and load-time. After loading the
+    image, the deferred word `startup` is invoked.
+
+    `bye            ( -- )`
+
+    Terminates `ff`.
+
+    `c"             ( | ..." -- a )`
+
+    Stores a counted string in the dictionary and pushes its
+    address. To be used in interpreted mode.
+
+    `cas            ( a1 x y -- f )`
+
+    Perform an atomic _compare and swap_ operation on address `a1`,
+    i.e.  compares the contents of the given address with `x` and, if
+    it is equal, replaces the stored value with `y`,
+    atomically. Pushes a flag indicating whether the operation
+    succeeded.
+
+    `cold           ( ... -- )`
+
+    Performs a "cold" start, completely re-initializing the system.
+
+    `crash          ( ... -- )`
+
+    Called when an uninitialized deferred word is invoked.
+ 
+    `halt           ( n -- )`
+
+    Terminate with exit-code `n`.
+
+    `heaptop        ( -- a )`
+
+    Variable holding the address of the top of the available heap.
+
+    `interpret      ( | ... -- )`
+
+    Interprets words from the text-input-buffer (TIB).
+
+    `load-image     ( | <filename> -- )`
+
+    Invokes `bload` with the given filename.
+
+    `mmap           ( a1 -- a2 )`
+
+    Invokes the Linux `mmap` system call. `a1` should be the address
+    of an `mmap_arg_struct` holding the parameters. See [this page][4]
+    for more details. This word is a no-op on Plan 9.
+
+    `number         ( a n1 -- n2 -1 | a n1 0 )`
+
+    Parses number given by string and either pushes the parsed
+    number and `true` or keeps the argument items, pushing `false`,
+    if the number is not a valid integer.
+
+    `parse          ( c | ... -- a )`
+
+    Reads the next characters in the input-stream until character
+    `c` is encountered and returns the address of a counted
+    string. Note that this word is not ANSI compatible (it returns a
+    counted string.)
+
+    `prompt         ( -- )`
+
+    A deferred word that prints the prompt that is shown when the
+    interpreter waits for input. The default prints ` ok` and advances
+    to a new line.
+
+    `query          ( -- )`
+
+    Reads a new line from stdin into the TIB.
+
+    `reveal         ( -- )`
+
+    Exposes the most recent item in the dictionary (see also
+    `smudge`.)
+
+    `rshifta        ( n1 n2 -- n3 )`
+
+    Performs an arithmetic shift of `n1` by `n2` bits.
+
+    `s0             ( -- a )`
+
+    Variable holding the initial stack-pointer.
+
+    `s@             ( -- a )`
+
+    Pushes the current stack-pointer.
+
+    `save-image     ( | <filename> -- )`
+
+    Saves the current dictionary to `<filename>`.
+
+    `signum         ( n1 -- n2 )`
+
+    Pushes -1, 0 or 1, depending on whether `n1` is negative, zero
+    or positive.
+
+    `smudge         ( -- )`
+
+    Hides the most recent dictionary entry.
+
+    `startup        ( -- )`
+
+    Invoked after a binary image is loaded. The default behaviour is to print
+    `"ok "` and invoke `abort`.
+
+    `u/mod          ( u1 u2 -- u3 u4 )`
+
+    Like `/mod`, but treats arguments as unsigned numbers.
+
+    `utfdecode      ( a1 -- a2 c )`
+
+    Decodes the UTF-8 byte sequence at address `a1` and returns the address
+    directly after the byte sequence and the unicode code-point.
+
+    `utfencode      ( a c -- a n )`
+
+    Encodes the unicode code-point `c` as an UTF-8 byte sequence at address
+    `a`, and returns the target address and the number of bytes.
+
+- Optional words
+
+  Some additional words are available in the source files
+  `stuff.f`. Read that file to learn more about what's included.
+  
+
+The Block-file Editor
+---------------------
+
+The system includes an optional simple command-based block-editor in
+the file `ed.f`.  See below for a list of available editor
+commands. Blocks are stored in a file called `blockfile`, which must
+reside in the current working directory. Note that the editor needs
+the words in `blocks.f`.
+
+To create a blockfile, use the following commands
+
+    # creates a blank file of 1024 blocks:
+    dd if=/dev/zero bs=1024 count=1024 | tr '\000' ' ' >blockfile
+
+The editor maintains two buffers, together with the current edited
+block (`scr`): the *insertion-buffer* and the *find-buffer*. The
+former is used in commands that add or insert text, the latter holds
+text that is searched.
+
+The editor is provided in source form in the file `ed.f`. The
+ANS block- and buffer-related words can be found in `blocks.f`.
+
+All editor words exist in the `editor` vocabulary, so execute `editor`
+before using them.
+
+- Editor commands:
+
+    `b              ( -- )`
+
+    List previous screen.
+
+    `copy           ( n1 n2 -- )`
+
+    Copies contents of block `n1` to block `n2`.
+
+    `cut            ( -- )`
+
+    Deletes everything on the line, starting from the current
+    position.
+
+    `d              ( [| ...] -- )`
+
+    Deletes given text (or last found text).
+
+    `e              ( -- )`
+
+    Deletes last found text.
+
+    `f              ( [| ...] -- )`
+
+    Searches given text (or contents of the find-buffer) in current
+    line.
+
+    `i              ( [| ...] -- )`
+
+    Inserts given text (or contents of the insert-buffer) at current
+    position.
+
+    `index          ( n1 n2 -- )`
+
+    Shows first lines of blocks in given range.
+
+    `k              ( -- )`
+
+    Swaps contents of insert- and find-buffer.
+
+    `l              ( -- )`
+
+    Clears window and lists current screen.
+
+    `n              ( -- )`
+
+    Lists next screen.
+
+    `p              ( [| ...] -- )`
+
+    Replaces current line with given text (or contents of the
+    insert-buffer).
+
+    `r              ( [| ...] -- )`
+
+    Replaces last found text with given text (or contents of the
+    insert-buffer).
+
+    `s              ( n [| ...] -- n )`
+
+    Searches given text (or contents of find-buffer) in current
+    screen and all blocks up to and including `n`.
+
+    `show           ( n1 n2 -- )`
+
+    Lists blocks in the given range.
+
+    `t              ( n -- )`
+
+    Selects line `n`.
+
+    `till           ( [| ...] -- )`
+
+    Erases all text from the current position to the position where
+    the given text (or the contents of the find-buffer) is found in
+    the current line.
+
+    `u              ( [| ...] -- )`
+
+    Inserts given text (or contents of insert-buffer) below the
+    current line, shifting remaining lines down.
+
+    `wipe           ( -- )`
+
+    Blanks the current screen.
+
+    `x              ( -- )`
+
+    Removes current line and stores it in the insertion-buffer, scrolls
+    lines below up.
+
+
+Tips and Tricks
+---------------
+
+- Creating a custom *image*
+
+  To create a personal development system that contains more than the
+  core wordset, use `save-image` to write the dictionary to a file:
+
+        include stuff.f   \ extras
+        include blocks.f  \ block-words
+        include ed.f      \ block-editor
+        save-image myimage
+
+  This generates `myimage`, that, when loaded, holds the same
+  dictionary that was in effect at the time the image was saved. To
+  load this image enter:
+
+        load-image myimage
+
+  Or, if you want to use it with the front-end, start the latter like
+  this:
+
+        forth -image myimage
+
+- Image files can be executed directly, as they are prefixes with
+  a *she-bang* line of the form `#!/usr/bin/env ff`. A custom
+  application can be created like this:
+
+        $ ff
+        : foo ." hello, world!" cr ;
+         ok
+        :noname ['] foo is startup ; execute
+         ok
+        save-image hello
+         ok
+        bye
+        $ chmod +x hello
+        $ hello
+        hello, world!
+        $
+
+- By using the `-ff` front-end option, nothing prevents you from
+  invoking a forth-interpreter on another machine:
+
+        forth -ff "ssh <remotemachine> ff"
+
+  Alternatively, put this into your `~/.forth`:
+
+        set forth "ssh <remotemachine> ff"
+
+- The initial heap/dictionary space is allocated to roughly 10 MB.  To
+  change this setting, modify the value of the constant `HEAP_SIZE` in
+  `ff-<ARCH>.s` and rebuild everything. In the same manner the sizes
+  of the data- and return stack can be adjusted by modifying
+  `SSTACK_SIZE` or `RSTACK_SIZE`.
+
+- Don't use tab (ASCII 9) characters - they are not treated as
+  any other non-whitespace character.
+
+
+List of all available words
+---------------------------
+
+    !              ( x a -- )                       primitive
+    !+             ( a1 x -- a2 )                   optional
+
+    ?exit          ( f -- )                         optional
+
+    "              ( ..." -- a n )                  
+
+    #              ( u1 -- u2 )                     
+    #>             ( u1 -- a n )                    
+    #s             ( u -- n )                       
+
+    '              ( <word> -- xt )                 
+
+    (              ( ...) -- )         immediate    
+    (+loop)        ( n -- )                         primitive
+    (:)            ( -- )                           primitive
+    (.)            ( n1 -- a n2 )                   
+    (?abort)       ( f a n -- )
+    (abort)        ( ... -- )
+    (constant)     ( -- x )                         primitive
+    (deferred)     ( -- )                           primitive
+    (do)           ( n1 n2 -- )                     primitive
+    (else)         ( -- )                           primitive
+    (if)           ( n1 -- )                        primitive
+    (literal)      ( -- n )                         primitive
+    (loop)         ( -- )                           primitive
+    (sliteral)     ( -- a n )                       primitive
+    (variable)     ( -- a)                          primitive
+
+    *              ( n1 n2 -- n3 )                  primitive
+
+    +              ( n1 n2 -- n3 )                  primitive
+    +!             ( n a -- )
+    +loop          ( n -- )            immediate
+
+    ,              ( x -- )
+    ,"             ( | ..." -- )                    optional
+
+    -              ( n1 n2 -- n3 )                  primitive
+    -trailing      ( a n1 -- a n2 )                 optional
+
+    .              ( n -- )
+    ."             ( | ..." -- )       immediate
+    .(             \( | ...) -- )      immediate    optional
+    .buffers       ( -- )                           optional
+    .s             ( -- )
+    .r             ( n1 n2 -- )
+
+    /              ( n1 n2 -- n3 )                  
+    /mod           ( n1 n2 -- n3 n4 )               primitive
+    /string        ( a1 n1 -- a2 n2 )               optional
+
+    0<             ( n -- f )
+    0<>            ( n -- f )
+    0=             ( n -- f )
+    0>             ( n -- f )
+
+    1+             ( n1 -- n2 )
+    1-             ( n1 -- n2 )
+    2*             ( n1 -- n2 )
+    2/             ( n1 -- n2 )
+    2@             ( a -- x y )
+    2!             ( x y a -- )
+    2>r            ( x y -- )
+    2drop          ( x y -- )
+    2dup           ( x y -- x y x y )
+    2nip           ( x y z -- z )
+    2r>            ( -- x y )
+    2swap          ( x y z q -- z q x y )
+
+    :              ( | <word> -- )
+    :noname        ( | ... -- xt )                  optional
+
+    ;              ( -- )              immediate
+
+    <              ( n1 n2 -- f )                   primitive
+    <#             ( -- )
+    <>             ( n1 n2 -- f )
+    <builds        ( | <word> -- )
+
+    =              ( n1 n2 -- f )                   primitive
+
+    >              ( n1 n2 -- f )                   primitive
+    >body          ( a1 -- a2 )
+    >in            ( -- a )
+    >limit         ( -- a )
+    >r             ( x -- )                         primitive
+
+    ?              ( a -- )
+    ?do            ( n1 n2 -- )
+    ?dup           ( x -- x [x] )
+    ?stack         ( -- )
+
+    @              ( a -- x )                       primitive
+    @+             ( a1 -- a2 x )                   optional
+
+    [              ( -- )
+    [']            ( | <word> -- xt )  immediate
+    [char]         ( | <char> -- c )   immediate
+
+    \              ( | ... -- )        immediate
+
+    ]              ( -- )              immediate
+
+    _end           ( -- a )                         primitive
+    _start         ( -- a )                         primitive
+
+    abort          ( ... -- )          deferred
+    abort"         ( f | ..." -- )     immediate
+    abs            ( n -- u )
+    accept         ( a n1 -- n2 )
+    again          ( -- )              immediate
+    align          ( -- )
+    aligned        ( a1 -- a2 )
+    allot          ( n -- )
+    also           ( -- )                           optional
+    and            ( n1 n2 -- n3 )                  primitive
+    args           ( -- a )
+
+    b              ( -- )                           editor
+    base           ( -- a )
+    begin          ( -- )              immediate
+    bl             ( -- c )
+    bload          ( a n -- )
+    blank          ( a n -- )
+    blk            ( -- a )
+    block          ( n -- a )
+    boot           ( -- )
+    bounds         ( a1 n -- a2 a1 )                optional
+    buffer         ( n -- a )
+    buffer:        ( n | <word> -- )                optional
+    bye            ( -- )                           
+
+    c!             ( c a -- )                       primitive
+    c,             ( c -- )
+    c@             ( a -- c )                       primitive
+    c"             ( | ..." -- a )                  
+    cas            ( a x y -- f )                   primitive
+    case           ( x -- )                         optional
+    cell+          ( a1 -- a2 )
+    cells          ( n1 -- n2 )
+    char           ( | <char> -- c )
+    clear          ( ... -- )                       primitive
+    close-file     ( fd -- ior )
+    cmove          ( a1 a2 n -- )                   primitive
+    cmove>         ( a1 a2 n -- )                   primitive
+    cold           ( ... -- )         
+    command        ( | <word> -- )   deferred       optional
+    compare        ( a1 n1 a2 n2 -- n3 )
+    constant       ( x | <word> -- x )
+    context        ( -- a )                         optional
+    copy           ( n1 n2 -- )                     editor
+    count          ( a1 -- a2 n )
+    cr             ( -- )
+    crash          ( -- )
+    create         ( | <word> -- )
+    current        ( -- )                           primitive
+    cut            ( -- )                           editor
+
+    d              ( | ... -- )                     editor
+    decimal        ( -- )
+    defer          ( | <word> -- )
+    definitions    ( -- )                           optional
+    depth          ( -- u )
+    do             ( n1 n2 -- )      immediate
+    does>          ( | ... -- a )
+    drop           ( x -- )                         primitive
+    dump           ( a n -- )
+    dup            ( x -- x x )                     primitive
+
+    e              ( -- )                           editor
+    editor         ( -- )                           editor
+    else           ( -- )            immediate
+    emit           ( c -- )
+    emits          ( c n -- )
+    empty-buffers  ( -- )
+    endcase        ( -- )                           optional
+    endof          ( -- )                           optional
+    erase          ( a n -- )
+    execute        ( xt -- )                        primitive
+    exit           ( -- )                           primitive
+
+    f              ( | ... -- )                     editor
+    false          ( -- 0 )
+    fill           ( a n c -- )
+    find           ( a -- a 0 | xt 1 | xt -1 )
+    flush          ( -- )
+    forth          ( -- )                           optional
+    forget         ( | <word> -- )                  optional
+
+    h              ( -- a )                         primitive
+    halt           ( n -- )                         primitive
+    heaptop        ( -- a )                         primitive
+    here           ( -- a )
+    hex            ( -- )
+    hold           ( c -- )
+
+    i              ( -- n )                         primitive
+    i              ( | ... -- )                     editor
+    if             ( f -- )          immediate
+    immediate      ( -- )
+    include        ( | <fname> -- )                 primitive
+    index          ( n1 n2 -- )
+    interpret      ( -- )
+    invert         ( n1 -- n2 )                     
+    is             ( xt | <word> -- ) immediate
+
+    j              ( -- n )                         primitive
+    join           ( -- )                           editor 
+
+    k              ( -- )                           editor
+    key            ( -- c )
+
+    l              ( -- )                           editor
+    list           ( n -- )                         editor
+    literal        ( n -- )
+    load           ( n -- )                         editor
+    load-image     ( | <fname> -- )
+    loop           ( -- )           immediate
+    lshift         ( n1 u -- n2 )                   primitive
+
+    max            ( n1 n2 -- n1 | n2 )
+    marker         ( | <word> -- )                  optional
+    min            ( n1 n2 -- n1 | n2 )
+    mmap           ( a1 -- a2 )                     primitive
+    mod            ( n1 n2 -- n3 )
+
+    n              ( -- )                           editor
+    negate         ( n1 -- n2 )
+    next-screen    ( -- )                           optional
+    nip            ( x y -- y )
+    noop           ( -- )                           optional
+    number         ( a n1 -- n2 -1 | a n1 0 )
+
+    of             ( x -- )                         optional
+    off            ( a -- )
+    on             ( a -- )
+    only           ( -- )                           optional
+    open-file      ( a n1 n2 -- fd ior )
+    or             ( n1 n2 -- n3 )                  primitive
+    order          ( -- )                           optional
+    over           ( x y -- x y x )                 primitive
+
+    p              ( | ... -- )                     editor
+    pad            ( -- a )
+    page           ( -- )
+    parse          ( c | ... -- a )
+    perform        ( a -- )                         optional
+    postpone       ( | <word> -- )                  optional
+    pick           ( ... n -- x )
+    previous       ( -- )                           optional
+    previous-screen ( -- )                           optional
+    prompt         ( -- )             deferred
+
+    query          ( -- )
+    quit           ( ... -- )
+
+    r              ( | ... -- )                     editor
+    r/o            ( -- n )
+    r/w            ( -- n )
+    r>             ( -- x )                         primitive
+    r@             ( -- x )                         primitive
+    random         ( -- n )                         optional
+    read-file      ( a n1 fd -- n2 ior )
+    recurse        ( -- )
+    refill         ( -- f )
+    repeat         ( -- )           immediate
+    reposition-file ( n fd -- ior )
+    reset          ( -- )                           primitive
+    restore-input  ( ... n -- )
+    reveal         ( -- )
+    rfind          ( xt -- a|0 )                    optional
+    rot            ( n1 -- n2 )
+    rshift         ( n1 u -- n2 )                   primitive
+    rshifta        ( n1 u -- n2 )                   primitive
+
+    s              ( n | ... -- n )                 editor
+    s"             ( | ..." -- a n ) immediate
+    s0             ( -- a )
+    s@             ( -- a )                         primitive
+    save-image     ( | <fname> -- )
+    save-input     ( -- ... n )
+    scan           ( a1 n1 c -- a2 n2 )             optional
+    scr            ( -- a )                         editor
+    search         ( a1 n1 a2 n2 -- a3 n3 f )
+    see            ( | <word> -- )                  optional
+    seed           ( -- a )                         optional
+    show           ( n1 n2 -- )                     editor
+    sign           ( n -- )
+    signum         ( n1 -- n2 )
+    skip           ( a1 n1 c -- a2 n2 )             optional
+    sliteral       ( | ..." -- )
+    smudge         ( -- )
+    space          ( -- )
+    spaces         ( n -- )
+    startup        ( -- )          deferred
+    state          ( -- a )
+    string         ( c | ... -- )
+    string,        ( a n -- )                       optional
+    swap           ( x y -- y x )
+
+    t              ( n -- )                         editor
+    then           ( -- )          immediate
+    th             ( n1 -- n2 )                     optional
+    thru           ( n1 n2 -- )                     editor
+    tib            ( -- a )
+    till           ( | ... -- )                     editor
+    true           ( -- -1 )
+    tuck           ( x y -- y x y )
+    type           ( a n -- )
+
+    u              ( | ... -- )                     editor
+    u.             ( u -- )
+    under+         ( n1 n2 n3 -- n4 n2 )            optional
+    unloop         ( -- )          immediate        primitive
+    until          ( f -- )        immediate
+    unused         ( -- u )
+    update         ( -- )
+    utfdecode      ( a1 -- a2 c )
+    utfencode      ( a c -- a n )
+
+    variable       ( | <word> -- )
+    vocabulary     ( | <word> -- )                  optional
+
+    w/o            ( -- n )
+    while          ( f -- )        immediate
+    wipe           ( -- )                           editor
+    within         ( n1 n2 n3 -- f )
+    word           ( c | <word> -- a )
+    words          ( -- )                           optional
+    write-file     ( a n fd -- ior )
+
+    x              ( -- )                           editor
+    xor            ( n1 n2 -- n3 )
+
+
+Frontend Key-bindings 
+---------------------
+
+The key-bindings match mostly the standard key-bindings in Tcl/Tk's `text`
+widget:
+
+    Delete                 Toggle "hold" mode
+    <Arrow>                Move insertion point
+    Sh-<Arrow>             Move insertion point + extend selection
+    C-Left, C-Right        Move insertion point by words
+    C-Sh-Left, C-Sh-Right  Move insertion point by words + extend selection
+    C-Sh-Up, C-Sh-Down     Move by paragraphs + extend selection
+    Next, Prior            Move vertically one screenful
+    Sh-Next, Sh-Prior      Move screenful + extend selection
+    C-Next, C-Prior        Move horizontally one page without changing point
+    C-a                    Move to beginning of line
+    Home                   Move to beginning of text
+    C-e                    Move to end of line
+    End                    Move to end of text
+    C-Space                Set selection anchor
+    C-Sh-Space             Select from anchor to insertion point
+    C-/                    Select all text
+    C-d                    Delete selection or one character
+    Backspace              Delete selection or last character
+    M-d                    Delete next word
+    C-k                    Cut rest of line
+    M-Backspace            Delete previous word
+    C-w                    Cut selection
+    C-t                    Transpose characters
+    C-z                    Undo
+    C-Sh-z                 Redo
+    C-+                    Increase font size
+    C--                    Decrease font size
+    Return                 Send current line to forth and insert newline
+    C-Up                   List previous block
+    C-Down                 List next block
+    Escape                 Terminate
+    Tab                    Indent or tab
+    Alt-w                  Copy current selection
+    Insert                 Insert unicode codepoint (hex or named character)
+    F1                     Show this text
+    
+
+
+Memory map
+----------
+
+    +-----------------------+-----------+-------------------------------------+
+    | Area                  |      Size | Contains                            |
+    +-----------------------+-----------+-------------------------------------+
+    | machine code words    |           | ".text" section ("_start"..."_end") |
+    | primitive dictionary  |           | start of ".data" section            |
+    | core dictionary       |           |                                     |
+    | system variables      |        16 |                                     |
+    | tib                   |      1024 |                                     |
+    | wordbuffer            |       256 |                                     |
+    | heapspace             |           | start of ".bss" section             |
+    | :                     |           |                                     |
+    |                       |           |                                     |
+    | insert buffer         |      1024 | if editor is loaded                 |
+    | find buffer           |      1024 |                                     |
+    | buffer space          | 16 x 1024 | if block-words are loaded           |
+    | return stack          |      4096 |                                     |
+    | parameter stack       |      4096 |                                     |
+    | end of heap           |           | Contents of variable "s0"           |
+    +-----------------------+-----------+-------------------------------------+
+
+
+Register Usage
+--------------
+
+    +----------------+---------------+--------------+----------------------------------+
+    | Forth register | i386 register | ARM register | Meaning                          |
+    +----------------+---------------+--------------+----------------------------------+
+    | TOS            | eax           | r0           | Top of stack                     |
+    | SP             | esp           | r13          | Data-stack ptr (grows downwards) |
+    | RP             | ebp           | r14          | Return-stack ptr (grows upwards) |
+    | AP             | esi           | r12          | Address-pointer                  |
+    | W              | edi           | r11          | "Work" register (holds CFA)      |
+    |                | ebx, ecx, edx | r1 - r5      | Temporaries                      |
+    +----------------+---------------+--------------+----------------------------------+
+
+
+License
+-------
+
+    Copyright (c) 2015, Felix L. Winkelmann
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+    1. Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer.
+    2. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the distribution.
+    3. The name of the authors may not be used to endorse or promote products
+       derived from this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS OR
+    IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+    OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+    IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+    INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+    NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+    THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+Contact
+-------
+
+If you have questions, suggestions, want to report bugs or comment on
+the system, please don't hesitate to contact me at 
+
+  ` felix <at> call-with-current-continuation  <dot> org `
+
+
+[1]: http://nasm.us/
+
+[2]: http://www.gnu.org/software/binutils/
+
+[3]: http://www.taygeta.com/forth/dpans.html
+
+[4]: http://docs.cs.up.ac.za/programming/asm/derick_tut/syscalls.html#mmap_arg_struct
+
+[5]: http://bitbucket.org/bunny351/ff
